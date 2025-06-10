@@ -1,16 +1,21 @@
+// MainMenuNavigation.cs
 using UnityEngine;
 using System.Collections;
 
 public class MainMenuNavigation : MonoBehaviour
 {
     [Header("References")]
-    public Transform playerRig;               // Root Transform of the XR-Rig (not Main Camera!)
-    public Transform mainMenuPoint;           // Where the rig should be positioned in the Main Menu
-    public Transform selectModePoint;         // Where the rig moves when “Select Mode” is chosen
-    public Transform settingsPoint;           // Where the rig moves when “Settings” is chosen
+    public Transform playerRig;               
+    public Transform mainMenuPoint;           
+    public Transform selectModePoint;         
+    public Transform settingsPoint;           
 
-    [Tooltip("This should be a Transform placed at the *ground-level* where you want the XR-Rig to land when the game starts.")]
-    public Transform startGamePoint;          // STILL drag your “StartGame_CameraPoint” here—but we’ll treat it as a *camera target*, not a rig target
+    [Tooltip("Transform ground‐level untuk XR-Rig saat game mulai.")]
+    public Transform startGamePoint;          
+
+    [Header("GameController Reference")]
+    [Tooltip("Script MainGameController pada GameController.")]
+    public MainGameController gameController;  // Drag GameObject yang punya MainGameController di Inspector
 
     [Header("UI Panels")]
     public GameObject mainMenuUI;
@@ -19,28 +24,38 @@ public class MainMenuNavigation : MonoBehaviour
     public GameObject startGameUI;
 
     [Header("Prolog Reference")]
-    public PrologController prologController; // Drag in your PrologManager GameObject here
+    public PrologController prologController; 
+
+    [Header("Audio Settings for Main Menu")]
+    public AudioClip[] bgClips;               
+    public AudioClip clickClip;               
+    public AudioSource bgAudioSource;         
+
+    [Header("TextMeshPro UI to Hide/Show")]
+    public GameObject uhiIntensityText;       
+    public GameObject hotspotRemainingText;   
 
     [Header("Transition Settings")]
     public float transitionDuration = 1f;
 
-    [Header("Audio Settings")]
-    public AudioClip[] bgClips;               // At least two BG clips for the main menu
-    public AudioClip clickClip;               // SFX for button clicks
-    public AudioSource bgAudioSource;         // AudioSource that plays BG music & SFX
+    public static event System.Action OnGameReady;
 
     private int lastBgIndex = -1;
     private Coroutine bgMusicCoroutine;
-
-    // === new fields for camera management ===
-    private Camera mainCamera;                // reference to Camera.main
-    private Vector3 cameraLocalOffset;        // the (rig-relative) offset of the camera before prolog begins
-    private Transform cameraOriginalParent;   // to remember where the camera belonged before detaching
-    // ==========================================
+    private Camera mainCamera;                
+    private Vector3 cameraLocalOffset;        
+    private Transform cameraOriginalParent;   
 
     void Awake()
     {
-        // 1) Validate that we indeed have a Camera.main at start
+        // 1) Matikan logo footstep di MainGameController selama di Main Menu/Prolog
+        if (gameController != null)
+        {
+            gameController.EnableFootstep(false);
+            Debug.Log("[MainMenuNavigation] Footstep dinonaktifkan di Main Menu/Prolog.");
+        }
+
+        // 2) Cache Camera.main dan local offset
         mainCamera = Camera.main;
         if (mainCamera == null)
         {
@@ -48,18 +63,16 @@ public class MainMenuNavigation : MonoBehaviour
         }
         else
         {
-            // Record the camera’s parent (which should be under playerRig)
             cameraOriginalParent = mainCamera.transform.parent;
-            // Record how far “up” the camera sits, relative to the rig’s origin
             cameraLocalOffset = mainCamera.transform.localPosition;
         }
 
-        // 2) Validate AudioListener (just a sanity check)
+        // 3) AudioListener sanity check
         AudioListener listener = FindObjectOfType<AudioListener>();
         if (listener == null) Debug.LogError("[AudioDebug] AudioListener not found in scene!");
         else Debug.Log("[AudioDebug] AudioListener: " + listener.gameObject.name);
 
-        // 3) Validate bgAudioSource, bgClips, clickClip
+        // 4) Validasi bgAudioSource, bgClips, clickClip
         if (bgAudioSource == null) Debug.LogError("[AudioDebug] bgAudioSource has not been assigned!");
         else
         {
@@ -82,7 +95,7 @@ public class MainMenuNavigation : MonoBehaviour
         else
             Debug.Log("[AudioDebug] clickClip = " + clickClip.name);
 
-        // 4) Position the XR-Rig at the mainMenuPoint and freeze physics
+        // 5) Posisikan XR-Rig di mainMenuPoint & freeze physics
         if (playerRig != null && mainMenuPoint != null)
         {
             Rigidbody rb = playerRig.GetComponent<Rigidbody>();
@@ -99,20 +112,24 @@ public class MainMenuNavigation : MonoBehaviour
             Debug.LogError("[MainMenuNavigation] playerRig or mainMenuPoint is null!");
         }
 
-        // 5) Initialize which UI panels are active
+        // 6) Inisialisasi UI Panels
         mainMenuUI.SetActive(true);
         selectModeUI.SetActive(false);
         settingsUI.SetActive(false);
         startGameUI.SetActive(false);
 
-        // 6) Start looping BG music
+        // 7) Sembunyikan TextMeshPro UI
+        if (uhiIntensityText != null) uhiIntensityText.SetActive(false);
+        if (hotspotRemainingText != null) hotspotRemainingText.SetActive(false);
+
+        // 8) Mulai looping Main Menu BG music
         if (bgAudioSource != null && bgClips != null && bgClips.Length >= 2)
         {
             bgMusicCoroutine = StartCoroutine(PlayBgMusicLoop());
             Debug.Log("[AudioDebug] PlayBgMusicLoop() started.");
         }
 
-        // 7) Subscribe to prolog completion
+        // 9) Subscribe ke Prolog completion
         if (prologController != null)
         {
             prologController.OnPrologComplete += OnPrologFinished;
@@ -124,16 +141,13 @@ public class MainMenuNavigation : MonoBehaviour
         }
     }
 
-    void Start()
-    {
-        // (Nothing else needed here; Awake already did subscriptions.)
-    }
-
     void OnDestroy()
     {
         if (prologController != null)
             prologController.OnPrologComplete -= OnPrologFinished;
     }
+
+    #region Main Menu Music & SFX
 
     IEnumerator PlayBgMusicLoop()
     {
@@ -168,11 +182,15 @@ public class MainMenuNavigation : MonoBehaviour
         bgAudioSource.PlayOneShot(clickClip);
     }
 
+    #endregion
+
+    #region Menu Navigation
+
     public void GoToSelectMode()
     {
         PlayClickSound();
         Debug.Log("[MainMenuNavigation] GoToSelectMode()");
-        StopAllCoroutines();
+        StopAllCoroutines(); // stop menu-music loop
         StartCoroutine(SmoothTransition(selectModePoint, () =>
         {
             mainMenuUI.SetActive(false);
@@ -185,7 +203,7 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
         Debug.Log("[MainMenuNavigation] GoToMainMenu()");
-        StopAllCoroutines();
+        StopAllCoroutines(); // stop any music coroutines
         StartCoroutine(SmoothTransition(mainMenuPoint, () =>
         {
             mainMenuUI.SetActive(true);
@@ -198,7 +216,7 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
         Debug.Log("[MainMenuNavigation] GoToSettings()");
-        StopAllCoroutines();
+        StopAllCoroutines(); // stop menu-music loop
         StartCoroutine(SmoothTransition(settingsPoint, () =>
         {
             mainMenuUI.SetActive(false);
@@ -211,7 +229,7 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
 
-        // 1) Stop only the main‐menu BG music (leave other sounds alone)
+        // Stop main-menu BG music
         if (bgMusicCoroutine != null)
         {
             StopCoroutine(bgMusicCoroutine);
@@ -223,15 +241,14 @@ public class MainMenuNavigation : MonoBehaviour
             Debug.Log("[AudioDebug] bgAudioSource.Stop()");
         }
 
-        // 2) Detach camera from rig so PrologController can move it independently
+        // Detach camera dari rig agar PrologController bisa gerakin kamera
         if (mainCamera != null)
         {
-            // Detach the camera from the XR Rig hierarchy
             mainCamera.transform.parent = null;
             Debug.Log("[MainMenuNavigation] Camera detached from XR-Rig for prolog.");
         }
 
-        // 3) Trigger Prolog sequence
+        // Trigger Prolog sequence
         if (prologController != null)
         {
             Debug.Log("[MainMenuNavigation] Calling StartPrologSequence()");
@@ -243,9 +260,11 @@ public class MainMenuNavigation : MonoBehaviour
         }
     }
 
+    #endregion
+
     void OnPrologFinished()
     {
-        // 1) Compute where the XR-Rig needs to go so that the camera ends up exactly at startGamePoint
+        // Dipanggil ketika PrologController invoke OnPrologComplete
         if (startGamePoint == null)
         {
             Debug.LogError("[MainMenuNavigation] startGamePoint has not been assigned!");
@@ -257,53 +276,37 @@ public class MainMenuNavigation : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[MainMenuNavigation] OnPrologFinished() → moving XR-Rig so camera lands at {startGamePoint.name}");
-
-        // Re-parent and reposition the camera *after* the transition:
+        Debug.Log($"[MainMenuNavigation] OnPrologFinished() → moving XR-Rig ke {startGamePoint.name}");
         StartCoroutine(SmoothTransitionToStartGame());
     }
 
     private IEnumerator SmoothTransitionToStartGame()
     {
-        // We still want a smooth motion for the rig → so we’ll interpolate the *camera* from wherever it is
-        //    to the “startGamePoint” and at the same time slide the rig to keep the camera at the correct offset.
-
-        // 1) Record the camera’s current position and rotation in world space:
+        // 1) Record posisi/rotasi kamera sekarang
         Vector3 camStartPos = mainCamera.transform.position;
         Quaternion camStartRot = mainCamera.transform.rotation;
 
-        // 2) The “world target” for the camera is simply startGamePoint.position / rotation:
+        // 2) Target posisi/rotasi kamera
         Vector3 camEndPos = startGamePoint.position;
         Quaternion camEndRot = startGamePoint.rotation;
 
-        // 3) Meanwhile, we know how far “up” the camera sits relative to the rig:
-        Vector3 rigOffset = cameraLocalOffset; 
-        //    (this was recorded in Awake: cameraLocalOffset = mainCamera.transform.localPosition)
+        // 3) Hitung rigEndPos agar kamera posisinya sesuai offset
+        Vector3 rigOffset = cameraLocalOffset;
+        Quaternion rigEndRot = startGamePoint.rotation;
+        Vector3 cameraOffsetWorld = rigEndRot * cameraLocalOffset;
+        Vector3 rigEndPos = camEndPos - cameraOffsetWorld;
 
-        // 4) We’ll lerp the camera itself from camStartPos→camEndPos, and lerp the rig from its *current* to *(camEndPos – rigOffset)*:
+        // 4) Record rig posisi/rotasi awal
         Vector3 rigStartPos = playerRig.position;
         Quaternion rigStartRot = playerRig.rotation;
-
-        // Calculate the rig’s end position so that, when the camera (child) is re-parented, 
-        // the camera’s world position equals camEndPos. Because cameraLocalOffset is the local 
-        // offset from rig’s origin to camera, we want:
-        //     ( rigEndPos + cameraLocalOffset_inWorld ) == camEndPos  
-        // Since cameraLocalOffset is a *local* Vector3, we must transform it by the rig’s final rotation 
-        // to know exactly how to subtract. Because we also want the rig to match startGamePoint.rotation:
-        Quaternion rigEndRot = startGamePoint.rotation;
-        Vector3 cameraOffsetWorld = rigEndRot * cameraLocalOffset; 
-        Vector3 rigEndPos = camEndPos - cameraOffsetWorld;
 
         float elapsed = 0f;
         while (elapsed < transitionDuration)
         {
             float tEase = EaseInOutQuad(elapsed / transitionDuration);
 
-            // 1) Lerp the camera itself
             mainCamera.transform.position = Vector3.Lerp(camStartPos, camEndPos, tEase);
             mainCamera.transform.rotation = Quaternion.Slerp(camStartRot, camEndRot, tEase);
-
-            // 2) Lerp the rig toward rigEndPos / rigEndRot
             playerRig.position = Vector3.Lerp(rigStartPos, rigEndPos, tEase);
             playerRig.rotation = Quaternion.Slerp(rigStartRot, rigEndRot, tEase);
 
@@ -311,35 +314,47 @@ public class MainMenuNavigation : MonoBehaviour
             yield return null;
         }
 
-        // Snap both exactly at the end
+        // Snap ke final
         mainCamera.transform.position = camEndPos;
         mainCamera.transform.rotation = camEndRot;
         playerRig.position = rigEndPos;
         playerRig.rotation = rigEndRot;
 
-        // 5) Now that both camera & rig are in the final, correct place:
-        //    • Re-parent the camera under the XR-Rig
+        // 5) Reparent kamera ke rig & restore offset
         mainCamera.transform.parent = playerRig;
         mainCamera.transform.localPosition = cameraLocalOffset;
         mainCamera.transform.localRotation = Quaternion.identity;
         Debug.Log("[MainMenuNavigation] Camera re-parented to XR-Rig; localOffset restored.");
 
-        // 6) Re-enable physics on the rig so it “lands” on the ground if above it:
+        // 6) Re-enable physics agar rig “turun” ke tanah
         Rigidbody rb = playerRig.GetComponent<Rigidbody>();
         if (rb != null)
         {
             rb.isKinematic = false;
             rb.useGravity = true;
-            Debug.Log("[AudioDebug] playerRig physics re-enabled so it can settle on the ground.");
+            Debug.Log("[AudioDebug] playerRig physics re-enabled.");
         }
 
-        // 7) Finally, show the “Start Game” UI and hide everything else
+        // 7) Tampilkan UI Start Game & sembunyikan panel lain
         mainMenuUI.SetActive(false);
         selectModeUI.SetActive(false);
         settingsUI.SetActive(false);
         startGameUI.SetActive(true);
 
-        Debug.Log($"[MainMenuNavigation] startGameUI is now active. XR-Rig at {playerRig.position}, camera at {mainCamera.transform.position}");
+        // 8) Tampilkan TextMeshPro UHI & Hotspot
+        if (uhiIntensityText != null)       uhiIntensityText.SetActive(true);
+        if (hotspotRemainingText != null)   hotspotRemainingText.SetActive(true);
+        Debug.Log("[MainMenuNavigation] startGameUI aktif. Menampilkan UHI & Hotspot teks.");
+
+        // 9) Beri tahu MainGameController bahwa game siap dimulai
+        OnGameReady?.Invoke();
+
+        // 10) Aktifkan footstep di MainGameController
+        if (gameController != null)
+        {
+            gameController.EnableFootstep(true);
+            Debug.Log("[MainMenuNavigation] Footstep diaktifkan dari MainMenuNavigation.");
+        }
     }
 
     private float EaseInOutQuad(float t)
@@ -348,7 +363,7 @@ public class MainMenuNavigation : MonoBehaviour
         return -1f + (4f - 2f * t) * t;
     }
 
-    IEnumerator SmoothTransition(Transform target, System.Action onComplete)
+    private IEnumerator SmoothTransition(Transform target, System.Action onComplete)
     {
         if (playerRig == null || target == null)
         {
@@ -373,7 +388,6 @@ public class MainMenuNavigation : MonoBehaviour
 
         playerRig.position = endPos;
         playerRig.rotation = endRot;
-
         onComplete?.Invoke();
     }
 }

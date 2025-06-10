@@ -1,11 +1,9 @@
-// OpenMeteoCsvGeneratorRuntime.cs
-// Runtime MonoBehaviour to fetch Open-Meteo data and generate timestamped CSVs under persistentDataPath/FetchedData/
-
 using System;
+using System.IO;
+using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -14,46 +12,39 @@ using UnityEngine.UI;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
-using Debug = UnityEngine.Debug;
+using Newtonsoft.Json.Linq;  // Pastikan Newtonsoft.Json.dll sudah di‐import ke Plugins
 
 public class OpenMeteoCsvGeneratorRuntime : MonoBehaviour
 {
     [Header("Csv TextAssets (place under Resources)")]
-    public TextAsset urbanCsv;
-    public TextAsset ruralCsv;
+    public TextAsset urbanCsv;   // harus berisi kolom: X (lon), Y (lat)
+    public TextAsset ruralCsv;   // harus berisi kolom: X (lon), Y (lat), VALUE (IGNORE VALUE)
 
     [Header("UI Elements")]
     public Button fetchButton;
     public TextMeshProUGUI statusText;
 
-    [Header("Generated CSVs Folder")]
-    public string fetchedDataFolder = "FetchedData";
+    [Header("Generated CSVs Folder (relative to Assets)")]
+    public string fetchedDataFolder = "FetchedData"; // di dalam Assets/FetchedData
 
-    [Header("Fuzzy Calculator (optional)")]
+    [Header("References")]
     public FuzzyRuntimeCalculator fuzzyCalculator;
+    public HotspotManager hotspotManager;
 
     private Coroutine fetchTimerCoroutine;
-
-    private IEnumerator FuzzyTimer()
-    {
-        int sec = 0;
-        while (true)
-        {
-            if (fetchButton != null)
-            {
-                var btnText = fetchButton.GetComponentInChildren<TextMeshProUGUI>();
-                if (btnText != null)
-                    btnText.text = $"Fuzzyficating... {sec}s";
-            }
-            sec++;
-            yield return new WaitForSeconds(1f);
-        }
-    }
-    private Coroutine fuzzyTimerCoroutine;
-
     private DateTime fetchStartTime;
 
-    void Awake()
+    // TimeZone Jakarta:
+    // di Windows gunakan "SE Asia Standard Time", di macOS/Linux gunakan "Asia/Jakarta"
+    private readonly TimeZoneInfo jakartaTz = TimeZoneInfo.FindSystemTimeZoneById(
+    #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            "SE Asia Standard Time"
+    #else
+            "Asia/Jakarta"
+    #endif
+    );
+
+    private void Awake()
     {
         if (fetchButton != null)
             fetchButton.onClick.AddListener(OnFetchButtonClicked);
@@ -65,180 +56,207 @@ public class OpenMeteoCsvGeneratorRuntime : MonoBehaviour
         while (true)
         {
             if (statusText != null)
-                statusText.text = $"Fetching data.. {sec}s";
+                statusText.text = $"Fetching data... {sec}s";
             sec++;
             yield return new WaitForSeconds(1f);
         }
     }
 
-    private void OnFetchButtonClicked() {
+    private void OnFetchButtonClicked()
+    {
         fetchStartTime = DateTime.UtcNow;
         fetchTimerCoroutine = StartCoroutine(FetchTimer());
-
-        // Path to fetched files
-        string dir = Path.Combine(Application.persistentDataPath, fetchedDataFolder);
-        if (Directory.Exists(dir)) {
-            var files = Directory.GetFiles(dir, "meteo_*.csv");
-            if (files.Length > 0) {
-                string latest = files.OrderByDescending(f => File.GetLastWriteTimeUtc(f)).First();
-                DateTime lastTime = File.GetLastWriteTimeUtc(latest);
-                if ((DateTime.UtcNow - lastTime).TotalHours < 3) {
-                    // Direct fuzzy within 3h
-                    if (fuzzyCalculator != null)
-                    {
-                        // disable button
-                        if (fetchButton != null) fetchButton.interactable = false;
-                        // start fuzzy timer
-                        fuzzyTimerCoroutine = StartCoroutine(FuzzyTimer());
-                        fuzzyCalculator.ProcessCsv(latest);
-                    }
-                    return;
-                }
-            }
-        }
         StartCoroutine(FetchRoutine());
     }
 
     private IEnumerator FetchRoutine()
     {
-        // Disable UI
+        // Disable UI dan mulai proses fetching
         if (fetchButton != null) fetchButton.interactable = false;
         if (statusText != null) statusText.text = "Fetching data...";
 
-        DateTime now = DateTime.UtcNow;
-        DateTime target = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc)
-                          .AddHours(-1);
+        // 1. Hitung waktu target (dibulatkan ke jam penuh) di Jakarta
+        DateTime nowUtc = DateTime.UtcNow;
+        DateTime nowJakarta = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, jakartaTz);
+        DateTime targetJakarta = new DateTime(
+            nowJakarta.Year, nowJakarta.Month, nowJakarta.Day,
+            nowJakarta.Hour, 0, 0,
+            DateTimeKind.Unspecified
+        );
+        DateTime targetUtc = TimeZoneInfo.ConvertTimeToUtc(targetJakarta, jakartaTz);
+        string targetTimeString = targetUtc.ToString("yyyy-MM-dd'T'HH:mm", CultureInfo.InvariantCulture);
 
-        // Prepare CSV lines
+        // 2. Siapkan StringBuilder untuk CSV
         List<string> lines = new List<string>();
-        lines.Add("type,longitude,latitude," + string.Join(",", variables));
+        lines.Add("type,longitude,latitude,temperature_2m,dew_point_2m,relative_humidity_2m,wind_speed_10m,vapour_pressure_deficit,evapotranspiration,wind_knots,apparent_temperature");
 
-        // Fetch for urban and rural
-        yield return FetchPoints("urban", urbanCsv, target, lines);
-        yield return FetchPoints("rural", ruralCsv, target, lines);
+        // 3. Kumpulkan daftar titik (type, lon, lat) dari urbanCsv dan ruralCsv
+        var points = new List<(string type, float lon, float lat)>();
 
-        // Determine output directory in persistentDataPath
-        string basePath = Application.persistentDataPath;
+        // 3a. Baca urbanCsv
+        if (urbanCsv != null)
+        {
+            var urbanLines = urbanCsv.text
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 1; i < urbanLines.Length; i++)
+            {
+                var cols = urbanLines[i].Split(',');
+                if (cols.Length < 2) continue;
+                if (float.TryParse(cols[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float lon) &&
+                    float.TryParse(cols[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float lat))
+                {
+                    points.Add(("urban", lon, lat));
+                }
+            }
+        }
+        else
+        {
+            Debug.LogWarning("urbanCsv belum di-assign di Inspector.");
+        }
+
+        // 3b. Baca ruralCsv
+        if (ruralCsv != null)
+        {
+            var ruralLines = ruralCsv.text
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 1; i < ruralLines.Length; i++)
+            {
+                var cols = ruralLines[i].Split(',');
+                if (cols.Length < 2) continue;
+                if (float.TryParse(cols[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float lon) &&
+                    float.TryParse(cols[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float lat))
+                {
+                    points.Add(("rural", lon, lat));
+                }
+            }
+        }
+        else
+        {
+            Debug.LogWarning("ruralCsv belum di-assign di Inspector.");
+        }
+
+        // 4. Loop setiap titik, kirim request ke Open-Meteo
+        int total = points.Count;
+        for (int i = 0; i < total; i++)
+        {
+            var (pointType, lon, lat) = points[i];
+            string dateString = targetJakarta.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            string url = $"https://api.open-meteo.com/v1/forecast?latitude={lat.ToString(CultureInfo.InvariantCulture)}&longitude={lon.ToString(CultureInfo.InvariantCulture)}" +
+                         $"&hourly=temperature_2m,dew_point_2m,relative_humidity_2m,wind_speed_10m,vapour_pressure_deficit,et0_fao_evapotranspiration,apparent_temperature" +
+                         $"&start_date={dateString}&end_date={dateString}&timezone=UTC";
+
+            using (UnityWebRequest uwr = UnityWebRequest.Get(url))
+            {
+                yield return uwr.SendWebRequest();
+
+                if (uwr.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogWarning($"Error fetching {pointType} @({lat},{lon}): {uwr.error}");
+                    continue;
+                }
+
+                try
+                {
+                    JObject json = JObject.Parse(uwr.downloadHandler.text);
+                    JObject hourly = json["hourly"] as JObject;
+                    if (hourly == null)
+                    {
+                        Debug.LogWarning($"Field 'hourly' tidak ditemukan untuk titik ({lat},{lon}).");
+                        continue;
+                    }
+
+                    JArray times = hourly["time"] as JArray;
+                    int idx = -1;
+                    for (int ti = 0; ti < times.Count; ti++)
+                    {
+                        string t = times[ti].ToString();
+                        if (t.Equals(targetTimeString, StringComparison.Ordinal))
+                        {
+                            idx = ti;
+                            break;
+                        }
+                    }
+                    if (idx < 0)
+                    {
+                        Debug.LogWarning($"Timestamp '{targetTimeString}' tidak ada untuk titik ({lat},{lon}).");
+                        continue;
+                    }
+
+                    float temperature  = hourly["temperature_2m"][idx].Value<float>();
+                    float dewPoint     = hourly["dew_point_2m"][idx].Value<float>();
+                    float relHum       = hourly["relative_humidity_2m"][idx].Value<float>();
+                    float windSpeed    = hourly["wind_speed_10m"][idx].Value<float>();
+                    float vpd          = hourly["vapour_pressure_deficit"][idx].Value<float>();
+                    float evap         = hourly["et0_fao_evapotranspiration"][idx].Value<float>();
+                    float appTemp      = hourly["apparent_temperature"][idx].Value<float>();
+                    float windKnots    = windSpeed * 1.94384f;
+
+                    string line = string.Join(",",
+                        pointType,
+                        lon.ToString(CultureInfo.InvariantCulture),
+                        lat.ToString(CultureInfo.InvariantCulture),
+                        temperature.ToString(CultureInfo.InvariantCulture),
+                        dewPoint.ToString(CultureInfo.InvariantCulture),
+                        relHum.ToString(CultureInfo.InvariantCulture),
+                        windSpeed.ToString(CultureInfo.InvariantCulture),
+                        vpd.ToString(CultureInfo.InvariantCulture),
+                        evap.ToString(CultureInfo.InvariantCulture),
+                        windKnots.ToString(CultureInfo.InvariantCulture),
+                        appTemp.ToString(CultureInfo.InvariantCulture)
+                    );
+                    lines.Add(line);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Error parsing JSON untuk titik ({lat},{lon}): {ex.Message}");
+                    continue;
+                }
+            }
+
+            yield return new WaitForSeconds(0.1f);
+        }
+
+        // 5. Tulis CSV ke folder Assets/FetchedData
+        string basePath = Application.dataPath;
         string outDir = Path.Combine(basePath, fetchedDataFolder);
         Directory.CreateDirectory(outDir);
 
-        // Unique filename
-        string timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+        string timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         string fileName = $"meteo_{timestamp}.csv";
         string fullPath = Path.Combine(outDir, fileName);
 
-        // Write CSV
-        File.WriteAllLines(fullPath, lines);
-        Debug.Log($"[OpenMeteo] CSV saved to: {fullPath}");
+        try
+        {
+            File.WriteAllLines(fullPath, lines, Encoding.UTF8);
+            Debug.Log($"[OpenMeteo] CSV saved to: {fullPath}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Gagal menulis file CSV: {ex.Message}");
+        }
 
-        #if UNITY_EDITOR
+    #if UNITY_EDITOR
         AssetDatabase.Refresh();
-        #endif
+    #endif
 
-        // Re-enable UI
-        if (statusText != null) statusText.text = "Fetch Complete";
-        if (fetchButton != null) fetchButton.interactable = true;
-
-        // Stop timer and show elapsed
+        // 6. Stop fetch timer dan update UI
         if (fetchTimerCoroutine != null)
+        {
             StopCoroutine(fetchTimerCoroutine);
+            fetchTimerCoroutine = null;
+        }
+
         TimeSpan elapsed = DateTime.UtcNow - fetchStartTime;
         if (statusText != null)
-            statusText.text = $"Fetching done in {elapsed.Minutes}m {elapsed.Seconds}s";
+            statusText.text = $"Fetched in {elapsed.Minutes}m {elapsed.Seconds}s";
 
-        // Begin fuzzy
         if (fetchButton != null)
-        {
-            var btnText = fetchButton.GetComponentInChildren<TextMeshProUGUI>();
-            if (btnText != null) btnText.text = "Fuzzyficating..";
-        }
+            fetchButton.interactable = true;
 
-        // Trigger fuzzy calculation if assigned
+        // 7. Trigger fuzzy calculation if available
         if (fuzzyCalculator != null)
+        {
             fuzzyCalculator.ProcessCsv(fullPath);
-    }
-
-    private IEnumerator FetchPoints(string kind, TextAsset csv, DateTime target, List<string> lines)
-    {
-        if (csv == null)
-        {
-            Debug.LogWarning($"{kind} CSV not assigned.");
-            yield break;
-        }
-
-        string[] rows = csv.text.Split(new[] {'\n', '\r'}, StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 1; i < rows.Length; i++)
-        {
-            string[] cols = rows[i].Split(',');
-            if (cols.Length < 2) continue;
-            if (!float.TryParse(cols[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float lon)) continue;
-            if (!float.TryParse(cols[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float lat)) continue;
-
-            string hourlyParam = string.Join("%2C", variables);
-            string url = $"{apiUrl}?latitude={lat.ToString(CultureInfo.InvariantCulture)}&longitude={lon.ToString(CultureInfo.InvariantCulture)}&hourly={hourlyParam}&past_days=1&timezone=UTC";
-
-            using (UnityWebRequest req = UnityWebRequest.Get(url))
-            {
-                yield return req.SendWebRequest();
-                if (req.result != UnityWebRequest.Result.Success)
-                {
-                    Debug.LogError($"Error fetching {kind} @({lat},{lon}): {req.error}");
-                    continue;
-                }
-
-                OpenMeteoResponse resp = JsonUtility.FromJson<OpenMeteoResponse>(req.downloadHandler.text);
-                if (resp == null || resp.hourly == null)
-                {
-                    Debug.LogWarning($"Invalid JSON for {kind} @({lat},{lon})");
-                    continue;
-                }
-
-                int idx = Array.FindIndex(resp.hourly.time, t =>
-                    DateTime.TryParse(t, null, DateTimeStyles.AdjustToUniversal, out DateTime dt) && dt == target
-                );
-                if (idx < 0)
-                {
-                    Debug.LogWarning($"No data for {kind} @({lat},{lon}) at {target:O}");
-                    continue;
-                }
-
-                List<string> vals = new List<string> { kind, lon.ToString(CultureInfo.InvariantCulture), lat.ToString(CultureInfo.InvariantCulture) };
-                foreach (string v in variables)
-                {
-                    var field = typeof(HourlyData).GetField(v);
-                    if (field != null)
-                    {
-                        float[] values = (float[])field.GetValue(resp.hourly);
-                        vals.Add(values[idx].ToString(CultureInfo.InvariantCulture));
-                    }
-                }
-                lines.Add(string.Join(",", vals));
-            }
         }
     }
-
-    private readonly string apiUrl = "https://api.open-meteo.com/v1/forecast";
-    private readonly string[] variables = new string[]
-    {
-        "temperature_2m", "dew_point_2m", "relative_humidity_2m",
-        "wind_speed_10m", "vapour_pressure_deficit", "evapotranspiration"
-    };
-}
-
-[Serializable]
-public class HourlyData
-{
-    public string[] time;
-    public float[] temperature_2m;
-    public float[] dew_point_2m;
-    public float[] relative_humidity_2m;
-    public float[] wind_speed_10m;
-    public float[] vapour_pressure_deficit;
-    public float[] evapotranspiration;
-}
-
-[Serializable]
-public class OpenMeteoResponse
-{
-    public HourlyData hourly;
 }

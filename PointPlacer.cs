@@ -77,9 +77,13 @@ public class PointPlacer : MonoBehaviour
 
             // Instantiate marker and ensure MarkerInfo is added
             var instance = Instantiate(prefabToUse, spawnPos, Quaternion.identity, transform);
-            var info = instance.GetComponent<MarkerInfo>() ?? instance.gameObject.AddComponent<MarkerInfo>();
-            info.longitude = lon;
-            info.latitude  = lat;
+var info = instance.GetComponent<MarkerInfo>() ?? instance.gameObject.AddComponent<MarkerInfo>();
+
+info.longitude = lon;
+info.latitude  = lat;
+// set isRural based on CSV “type” field:
+info.isRural   = (type == "rural");
+
         }
     }
 
