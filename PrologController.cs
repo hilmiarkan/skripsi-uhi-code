@@ -17,18 +17,11 @@ public class PrologController : MonoBehaviour
 
     [Header("References to UI Elements")]
     public CanvasGroup fadePanel;
-    public GameObject prologTitleText;       // “PROLOG” label
+    public GameObject prologTitleText;       // "PROLOG" label
     public TextMeshProUGUI subtitleTMP;      // subtitles / VO text
 
-    [Header("Audio for Voice-Over")]
-    public AudioSource voiceAudioSource;
-    public AudioClip voiceOver1;
-    public AudioClip voiceOver2;
-    public AudioClip voiceOver3;
-
-    [Header("Audio for Prolog BGM")]
-    public AudioSource prologBgmSource;
-    public AudioClip prologBgmClip;
+    [Header("Audio Reference")]
+    public AudioManager audioManager;
 
     [Header("Cam Move Settings")]
     public float moveDuration = 5f;
@@ -65,7 +58,7 @@ public class PrologController : MonoBehaviour
         if (fadePanel != null) fadePanel.alpha = 0f;
         else Debug.LogError("[PrologController] fadePanel was not assigned!");
 
-        // 4) Hide the “PROLOG” title text
+        // 4) Hide the "PROLOG" title text
         if (prologTitleText != null) prologTitleText.SetActive(false);
         else Debug.LogError("[PrologController] prologTitleText was not assigned!");
 
@@ -73,12 +66,9 @@ public class PrologController : MonoBehaviour
         if (subtitleTMP != null) subtitleTMP.text = "";
         else Debug.LogError("[PrologController] subtitleTMP was not assigned!");
 
-        // 6) Validate all audio fields
-        if (voiceAudioSource == null) Debug.LogError("[PrologController] voiceAudioSource was not assigned!");
-        if (voiceOver1 == null || voiceOver2 == null || voiceOver3 == null)
-            Debug.LogError("[PrologController] One (or more) voiceOver clips were not assigned!");
-        if (prologBgmSource == null) Debug.LogError("[PrologController] prologBgmSource was not assigned!");
-        if (prologBgmClip == null) Debug.LogError("[PrologController] prologBgmClip was not assigned!");
+        // 6) Validate AudioManager reference
+        if (audioManager == null && AudioManager.Instance == null)
+            Debug.LogError("[PrologController] AudioManager reference was not assigned and no Instance found!");
 
         // 7) Ensure we have all six prolog points
         if (prologPoint1 == null || prologPoint2 == null ||
@@ -104,75 +94,124 @@ public class PrologController : MonoBehaviour
     private IEnumerator PrologSequenceCoroutine()
     {
         // ————————————————————————————————
-        // STEP 1: Start looping BGM for prolog, if assigned
-        if (prologBgmSource != null && prologBgmClip != null)
-        {
-            prologBgmSource.clip = prologBgmClip;
-            prologBgmSource.loop = true;
-            prologBgmSource.Play();
-            Debug.Log("[PrologController] Prolog BGM started.");
-        }
+        // STEP 1: AudioManager already started prolog BGM when MainMenuNavigation called OnPrologStarted()
+        Debug.Log("[PrologController] Prolog BGM should already be playing via AudioManager.");
 
         // ————————————————————————————————
         // STEP 2: Fade-in fadePanel (0 → 1)
         yield return StartCoroutine(FadeCanvas(0f, 1f, fadeDuration));
 
         // ————————————————————————————————
-        // STEP 3: Teleport camera to prologPoint1, show “PROLOG” title briefly
+        // STEP 3: Teleport camera to prologPoint1, tunggu 1 detik dengan background hitam
         mainCameraTransform.position = prologPoint1.position;
         mainCameraTransform.rotation = prologPoint1.rotation;
-        prologTitleText.SetActive(true);
         yield return new WaitForSeconds(1f);
-        prologTitleText.SetActive(false);
 
         // ————————————————————————————————
-        // STEP 4: Fade-out fadePanel (1 → 0)
-        yield return StartCoroutine(FadeCanvas(1f, 0f, fadeDuration));
-
-        // ————————————————————————————————
-        // STEP 5: Move camera to prologPoint2 while playing voiceOver1 + subtitleLine1
-        voiceAudioSource.clip = voiceOver1;
-        voiceAudioSource.Play();
+        // STEP 4: Show "PROLOG" title, start voice over, dan langsung mulai animasi camera
+        prologTitleText.SetActive(true);
+        
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayVoiceOver(0); // VO1
+        }
+        else if (audioManager != null)
+        {
+            audioManager.PlayVoiceOver(0); // VO1
+        }
         subtitleTMP.text = subtitleLine1;
 
-        yield return StartCoroutine(MoveCamera(prologPoint2, moveDuration));
-        yield return new WaitUntil(() => !voiceAudioSource.isPlaying);
+        // ————————————————————————————————
+        // STEP 5: Langsung mulai move camera to prologPoint2 sambil fade out dan voice over
+        StartCoroutine(FadeCanvas(1f, 0f, fadeDuration)); // Fade out bersamaan
+        yield return StartCoroutine(MoveCamera(prologPoint2, moveDuration)); // Move camera
+
+        // ————————————————————————————————
+        // STEP 6: Hide tulisan "PROLOG" setelah camera movement selesai
+        prologTitleText.SetActive(false);
+        
+        // Wait for voice-over to finish
+        if (AudioManager.Instance != null)
+        {
+            yield return new WaitUntil(() => !AudioManager.Instance.voiceOverSource.isPlaying);
+        }
+        else if (audioManager != null)
+        {
+            yield return new WaitUntil(() => !audioManager.voiceOverSource.isPlaying);
+        }
         subtitleTMP.text = "";
 
         // ————————————————————————————————
-        // STEP 6: Blink (quick fade in/out)
+        // STEP 11: Blink (quick fade in/out)
         yield return StartCoroutine(FadeCanvas(0f, 1f, blinkDuration));
         yield return StartCoroutine(FadeCanvas(1f, 0f, blinkDuration));
 
         // ————————————————————————————————
-        // STEP 7: Teleport → Move camera to prologPoint3, then to prologPoint4 while playing voiceOver2 + subtitleLine2
+        // STEP 12: Teleport → Move camera to prologPoint3, then to prologPoint4 while playing voiceOver2 + subtitleLine2
         mainCameraTransform.position = prologPoint3.position;
         mainCameraTransform.rotation = prologPoint3.rotation;
 
-        voiceAudioSource.clip = voiceOver2;
-        voiceAudioSource.Play();
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayVoiceOver(1); // VO2
+        }
+        else if (audioManager != null)
+        {
+            audioManager.PlayVoiceOver(1); // VO2
+        }
         subtitleTMP.text = subtitleLine2;
 
         yield return StartCoroutine(MoveCamera(prologPoint4, moveDuration2));
-        yield return new WaitUntil(() => !voiceAudioSource.isPlaying);
+        
+        // Wait for voice-over to finish
+        if (AudioManager.Instance != null)
+        {
+            yield return new WaitUntil(() => !AudioManager.Instance.voiceOverSource.isPlaying);
+        }
+        else if (audioManager != null)
+        {
+            yield return new WaitUntil(() => !audioManager.voiceOverSource.isPlaying);
+        }
         subtitleTMP.text = "";
 
         // ————————————————————————————————
-        // STEP 8: Teleport → Move camera to prologPoint5, then to prologPoint6 while playing voiceOver3 + subtitleLine3
+        // STEP 13: Teleport → Move camera to prologPoint5, then to prologPoint6 while playing voiceOver3 + subtitleLine3
         mainCameraTransform.position = prologPoint5.position;
         mainCameraTransform.rotation = prologPoint5.rotation;
 
-        voiceAudioSource.clip = voiceOver3;
-        voiceAudioSource.Play();
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayVoiceOver(2); // VO3
+        }
+        else if (audioManager != null)
+        {
+            audioManager.PlayVoiceOver(2); // VO3
+        }
         subtitleTMP.text = subtitleLine3;
 
         yield return StartCoroutine(MoveCamera(prologPoint6, moveDuration3));
-        yield return new WaitUntil(() => !voiceAudioSource.isPlaying);
+        
+        // Wait for voice-over to finish
+        if (AudioManager.Instance != null)
+        {
+            yield return new WaitUntil(() => !AudioManager.Instance.voiceOverSource.isPlaying);
+        }
+        else if (audioManager != null)
+        {
+            yield return new WaitUntil(() => !audioManager.voiceOverSource.isPlaying);
+        }
         subtitleTMP.text = "";
 
         // ————————————————————————————————
-        // STEP 9: Stop the prolog BGM, then fire the OnPrologComplete event
-        if (prologBgmSource.isPlaying) prologBgmSource.Stop();
+        // STEP 14: Stop prolog audio via AudioManager, then fire the OnPrologComplete event
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.OnPrologEnded();
+        }
+        else if (audioManager != null)
+        {
+            audioManager.OnPrologEnded();
+        }
         Debug.Log("[PrologController] Prolog finished → invoking OnPrologComplete().");
         OnPrologComplete?.Invoke();
     }
@@ -199,7 +238,7 @@ public class PrologController : MonoBehaviour
         float elapsed = 0f;
         while (elapsed < dur)
         {
-            float t = Mathf.SmoothStep(0f, 1f, elapsed / dur);
+            float t = elapsed / dur; // Linear interpolation instead of SmoothStep
             mainCameraTransform.position = Vector3.Lerp(startPos, endPos, t);
             mainCameraTransform.rotation = Quaternion.Slerp(startRot, endRot, t);
             elapsed += Time.deltaTime;

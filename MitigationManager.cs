@@ -30,8 +30,8 @@ public class MitigationManager : MonoBehaviour
     [Header("References")]
     [Tooltip("Referensi ke HotspotManager untuk menghapus hotspot")]
     public HotspotManager hotspotManager;
-    [Tooltip("Referensi ke FuzzyRuntimeCalculator untuk menghitung ulang UHI")]
-    public FuzzyRuntimeCalculator fuzzyCalculator;
+    [Tooltip("Referensi ke FuzzyCalculator untuk menghitung ulang UHI")]
+    public FuzzyCalculator fuzzyCalculator;
     [Tooltip("Path lengkap ke file CSV raw terakhir")]
     public string rawCsvPath;
 
@@ -117,7 +117,8 @@ public class MitigationManager : MonoBehaviour
         // Update UHI calculation
         if (fuzzyCalculator != null && !string.IsNullOrEmpty(rawCsvPath))
         {
-            fuzzyCalculator.ComputeUhiFromRaw(rawCsvPath);
+            float uhiIntensity = fuzzyCalculator.CalculateUHIIntensity(rawCsvPath, false);
+            Debug.Log($"[MitigationManager] UHI Intensity recalculated: {uhiIntensity:F1}°C");
         }
     }
 } 

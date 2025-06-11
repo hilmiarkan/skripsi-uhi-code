@@ -13,9 +13,9 @@ public class MainMenuNavigation : MonoBehaviour
     [Tooltip("Transform ground‐level untuk XR-Rig saat game mulai.")]
     public Transform startGamePoint;          
 
-    [Header("GameController Reference")]
-    [Tooltip("Script MainGameController pada GameController.")]
-    public MainGameController gameController;  // Drag GameObject yang punya MainGameController di Inspector
+    [Header("Audio Reference")]
+    [Tooltip("Script AudioManager untuk mengontrol audio.")]
+    public AudioManager audioManager;  // Drag GameObject yang punya AudioManager di Inspector
 
     [Header("UI Panels")]
     public GameObject mainMenuUI;
@@ -26,32 +26,31 @@ public class MainMenuNavigation : MonoBehaviour
     [Header("Prolog Reference")]
     public PrologController prologController; 
 
-    [Header("Audio Settings for Main Menu")]
-    public AudioClip[] bgClips;               
-    public AudioClip clickClip;               
-    public AudioSource bgAudioSource;         
+         
 
-    [Header("TextMeshPro UI to Hide/Show")]
-    public GameObject uhiIntensityText;       
-    public GameObject hotspotRemainingText;   
+   
 
     [Header("Transition Settings")]
     public float transitionDuration = 1f;
 
     public static event System.Action OnGameReady;
 
-    private int lastBgIndex = -1;
-    private Coroutine bgMusicCoroutine;
+
     private Camera mainCamera;                
     private Vector3 cameraLocalOffset;        
     private Transform cameraOriginalParent;   
 
     void Awake()
     {
-        // 1) Matikan logo footstep di MainGameController selama di Main Menu/Prolog
-        if (gameController != null)
+        // 1) Matikan footstep di AudioManager selama di Main Menu/Prolog
+        if (AudioManager.Instance != null)
         {
-            gameController.EnableFootstep(false);
+            AudioManager.Instance.EnableFootstep(false);
+            Debug.Log("[MainMenuNavigation] Footstep dinonaktifkan di Main Menu/Prolog.");
+        }
+        else if (audioManager != null)
+        {
+            audioManager.EnableFootstep(false);
             Debug.Log("[MainMenuNavigation] Footstep dinonaktifkan di Main Menu/Prolog.");
         }
 
@@ -67,33 +66,7 @@ public class MainMenuNavigation : MonoBehaviour
             cameraLocalOffset = mainCamera.transform.localPosition;
         }
 
-        // 3) AudioListener sanity check
-        AudioListener listener = FindObjectOfType<AudioListener>();
-        if (listener == null) Debug.LogError("[AudioDebug] AudioListener not found in scene!");
-        else Debug.Log("[AudioDebug] AudioListener: " + listener.gameObject.name);
 
-        // 4) Validasi bgAudioSource, bgClips, clickClip
-        if (bgAudioSource == null) Debug.LogError("[AudioDebug] bgAudioSource has not been assigned!");
-        else
-        {
-            if (!bgAudioSource.enabled) Debug.LogWarning("[AudioDebug] bgAudioSource is disabled!");
-            if (bgAudioSource.mute) Debug.LogWarning("[AudioDebug] bgAudioSource is muted!");
-            Debug.Log("[AudioDebug] bgAudioSource: " + bgAudioSource.gameObject.name);
-        }
-
-        if (bgClips == null || bgClips.Length < 2)
-            Debug.LogError("[AudioDebug] bgClips must have at least two clips assigned!");
-        else
-            for (int i = 0; i < bgClips.Length; i++)
-                if (bgClips[i] == null)
-                    Debug.LogError($"[AudioDebug] bgClips[{i}] has not been assigned!");
-                else
-                    Debug.Log($"[AudioDebug] bgClips[{i}] = {bgClips[i].name}");
-
-        if (clickClip == null)
-            Debug.LogWarning("[AudioDebug] clickClip has not been assigned!");
-        else
-            Debug.Log("[AudioDebug] clickClip = " + clickClip.name);
 
         // 5) Posisikan XR-Rig di mainMenuPoint & freeze physics
         if (playerRig != null && mainMenuPoint != null)
@@ -118,15 +91,18 @@ public class MainMenuNavigation : MonoBehaviour
         settingsUI.SetActive(false);
         startGameUI.SetActive(false);
 
-        // 7) Sembunyikan TextMeshPro UI
-        if (uhiIntensityText != null) uhiIntensityText.SetActive(false);
-        if (hotspotRemainingText != null) hotspotRemainingText.SetActive(false);
 
-        // 8) Mulai looping Main Menu BG music
-        if (bgAudioSource != null && bgClips != null && bgClips.Length >= 2)
+
+        // 8) Start main menu music through AudioManager
+        if (AudioManager.Instance != null)
         {
-            bgMusicCoroutine = StartCoroutine(PlayBgMusicLoop());
-            Debug.Log("[AudioDebug] PlayBgMusicLoop() started.");
+            AudioManager.Instance.OnMainMenuEntered();
+            Debug.Log("[MainMenuNavigation] Main menu music started via AudioManager.");
+        }
+        else if (audioManager != null)
+        {
+            audioManager.OnMainMenuEntered();
+            Debug.Log("[MainMenuNavigation] Main menu music started via AudioManager.");
         }
 
         // 9) Subscribe ke Prolog completion
@@ -147,39 +123,18 @@ public class MainMenuNavigation : MonoBehaviour
             prologController.OnPrologComplete -= OnPrologFinished;
     }
 
-    #region Main Menu Music & SFX
-
-    IEnumerator PlayBgMusicLoop()
-    {
-        while (true)
-        {
-            int nextIndex = Random.Range(0, bgClips.Length);
-            if (bgClips.Length > 1)
-                while (nextIndex == lastBgIndex)
-                    nextIndex = Random.Range(0, bgClips.Length);
-
-            lastBgIndex = nextIndex;
-            bgAudioSource.clip = bgClips[nextIndex];
-            Debug.Log($"[AudioDebug] Playing BG main menu: {bgClips[nextIndex].name}");
-            bgAudioSource.Play();
-            yield return new WaitForSeconds(bgAudioSource.clip.length);
-        }
-    }
+    #region Audio Management
 
     public void PlayClickSound()
     {
-        if (bgAudioSource == null)
+        if (AudioManager.Instance != null)
         {
-            Debug.LogWarning("[AudioDebug] bgAudioSource is null, cannot PlayOneShot()");
-            return;
+            AudioManager.Instance.PlayClickSound();
         }
-        if (clickClip == null)
+        else if (audioManager != null)
         {
-            Debug.LogWarning("[AudioDebug] clickClip is null, no SFX assigned for button.");
-            return;
+            audioManager.PlayClickSound();
         }
-        Debug.Log("[AudioDebug] Play SFX click: " + clickClip.name);
-        bgAudioSource.PlayOneShot(clickClip);
     }
 
     #endregion
@@ -190,7 +145,6 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
         Debug.Log("[MainMenuNavigation] GoToSelectMode()");
-        StopAllCoroutines(); // stop menu-music loop
         StartCoroutine(SmoothTransition(selectModePoint, () =>
         {
             mainMenuUI.SetActive(false);
@@ -203,7 +157,6 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
         Debug.Log("[MainMenuNavigation] GoToMainMenu()");
-        StopAllCoroutines(); // stop any music coroutines
         StartCoroutine(SmoothTransition(mainMenuPoint, () =>
         {
             mainMenuUI.SetActive(true);
@@ -216,7 +169,6 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
         Debug.Log("[MainMenuNavigation] GoToSettings()");
-        StopAllCoroutines(); // stop menu-music loop
         StartCoroutine(SmoothTransition(settingsPoint, () =>
         {
             mainMenuUI.SetActive(false);
@@ -229,16 +181,14 @@ public class MainMenuNavigation : MonoBehaviour
     {
         PlayClickSound();
 
-        // Stop main-menu BG music
-        if (bgMusicCoroutine != null)
+        // Notify AudioManager about prolog start (will stop menu music automatically)
+        if (AudioManager.Instance != null)
         {
-            StopCoroutine(bgMusicCoroutine);
-            Debug.Log("[AudioDebug] Stopped PlayBgMusicLoop()");
+            AudioManager.Instance.OnPrologStarted();
         }
-        if (bgAudioSource != null)
+        else if (audioManager != null)
         {
-            bgAudioSource.Stop();
-            Debug.Log("[AudioDebug] bgAudioSource.Stop()");
+            audioManager.OnPrologStarted();
         }
 
         // Detach camera dari rig agar PrologController bisa gerakin kamera
@@ -303,12 +253,12 @@ public class MainMenuNavigation : MonoBehaviour
         float elapsed = 0f;
         while (elapsed < transitionDuration)
         {
-            float tEase = EaseInOutQuad(elapsed / transitionDuration);
+            float t = elapsed / transitionDuration; // Linear instead of ease
 
-            mainCamera.transform.position = Vector3.Lerp(camStartPos, camEndPos, tEase);
-            mainCamera.transform.rotation = Quaternion.Slerp(camStartRot, camEndRot, tEase);
-            playerRig.position = Vector3.Lerp(rigStartPos, rigEndPos, tEase);
-            playerRig.rotation = Quaternion.Slerp(rigStartRot, rigEndRot, tEase);
+            mainCamera.transform.position = Vector3.Lerp(camStartPos, camEndPos, t);
+            mainCamera.transform.rotation = Quaternion.Slerp(camStartRot, camEndRot, t);
+            playerRig.position = Vector3.Lerp(rigStartPos, rigEndPos, t);
+            playerRig.rotation = Quaternion.Slerp(rigStartRot, rigEndRot, t);
 
             elapsed += Time.deltaTime;
             yield return null;
@@ -341,19 +291,26 @@ public class MainMenuNavigation : MonoBehaviour
         settingsUI.SetActive(false);
         startGameUI.SetActive(true);
 
-        // 8) Tampilkan TextMeshPro UHI & Hotspot
-        if (uhiIntensityText != null)       uhiIntensityText.SetActive(true);
-        if (hotspotRemainingText != null)   hotspotRemainingText.SetActive(true);
-        Debug.Log("[MainMenuNavigation] startGameUI aktif. Menampilkan UHI & Hotspot teks.");
+        // 8) Notify UIManager to show game UI
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance.TransitionToGameMode();
+            Debug.Log("[MainMenuNavigation] Game UI transitioned via UIManager.");
+        }
 
         // 9) Beri tahu MainGameController bahwa game siap dimulai
         OnGameReady?.Invoke();
 
-        // 10) Aktifkan footstep di MainGameController
-        if (gameController != null)
+        // 10) Notify AudioManager that we're entering game mode
+        if (AudioManager.Instance != null)
         {
-            gameController.EnableFootstep(true);
-            Debug.Log("[MainMenuNavigation] Footstep diaktifkan dari MainMenuNavigation.");
+            AudioManager.Instance.OnGameModeEntered();
+            Debug.Log("[MainMenuNavigation] Game mode entered, audio switched.");
+        }
+        else if (audioManager != null)
+        {
+            audioManager.OnGameModeEntered();
+            Debug.Log("[MainMenuNavigation] Game mode entered, audio switched.");
         }
     }
 
@@ -379,9 +336,9 @@ public class MainMenuNavigation : MonoBehaviour
 
         while (elapsed < transitionDuration)
         {
-            float tEase = EaseInOutQuad(elapsed / transitionDuration);
-            playerRig.position = Vector3.Lerp(startPos, endPos, tEase);
-            playerRig.rotation = Quaternion.Slerp(startRot, endRot, tEase);
+            float t = elapsed / transitionDuration; // Linear instead of ease
+            playerRig.position = Vector3.Lerp(startPos, endPos, t);
+            playerRig.rotation = Quaternion.Slerp(startRot, endRot, t);
             elapsed += Time.deltaTime;
             yield return null;
         }

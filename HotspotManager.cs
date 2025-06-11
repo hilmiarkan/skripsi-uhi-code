@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
 using TMPro;
 
 public class HotspotManager : MonoBehaviour
@@ -39,6 +40,15 @@ public class HotspotManager : MonoBehaviour
                 Destroy(spawnedHotspots[i]);
         }
         spawnedHotspots.Clear();
+
+        // Also clean any existing children in hotspotParent (safety measure)
+        if (hotspotParent != null)
+        {
+            for (int i = hotspotParent.childCount - 1; i >= 0; i--)
+            {
+                DestroyImmediate(hotspotParent.GetChild(i).gameObject);
+            }
+        }
     }
 
     /// <summary>
@@ -124,6 +134,7 @@ public class HotspotManager : MonoBehaviour
     /// </summary>
     public void CreateTop5Hotspots(List<(Transform marker, float value)> markers, string type)
     {
+        // Clear previous hotspots to prevent duplication
         ClearHotspots();
 
         // Pilih 5 marker dengan nilai tertinggi
@@ -132,6 +143,8 @@ public class HotspotManager : MonoBehaviour
             .Take(5)
             .ToList();
 
+        Debug.Log($"[HotspotManager] Creating {top5.Count} hotspots of type '{type}'");
+
         // Buat hotspot untuk setiap marker
         foreach (var (marker, value) in top5)
         {
@@ -139,7 +152,31 @@ public class HotspotManager : MonoBehaviour
             if (info != null)
             {
                 CreateHotspot(marker.position, type, info.longitude, info.latitude);
+                Debug.Log($"[HotspotManager] Created hotspot at ({info.longitude:F4}, {info.latitude:F4}) with value {value:F1}°C");
             }
         }
+    }
+
+    /// <summary>
+    /// Get the count of currently spawned hotspots
+    /// </summary>
+    public int GetHotspotCount()
+    {
+        return spawnedHotspots.Count;
+    }
+
+    /// <summary>
+    /// Check if a hotspot exists at a specific position
+    /// </summary>
+    public bool HasHotspotAt(Vector3 position, float tolerance = 1f)
+    {
+        foreach (var hotspot in spawnedHotspots)
+        {
+            if (hotspot != null && Vector3.Distance(hotspot.transform.position, position) < tolerance)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 } 
