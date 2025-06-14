@@ -5,21 +5,11 @@ using System.Collections.Generic;
 public class GameController : MonoBehaviour
 {
     [Header("Core Components")]
-    public DataManager dataManager;
-    public OpenMeteoFetcher fetcher;
     public FuzzyCalculator fuzzyCalculator;
     public MarkerUpdater markerUpdater;
     public HotspotManager hotspotManager;
     public UIManager uiManager;
     public HeatmapGenerator heatmapGenerator;
-
-    [Header("Game State")]
-    public bool autoStartFetching = true;
-    public bool isInGameMode = false;
-
-    private float currentUHIIntensity = 0f;
-    private int mitigatedHotspots = 0;
-    private const int totalHotspots = 5;
 
     public static GameController Instance { get; private set; }
 
@@ -29,7 +19,6 @@ public class GameController : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(gameObject);
-            InitializeGame();
         }
         else
         {
@@ -37,261 +26,170 @@ public class GameController : MonoBehaviour
         }
     }
 
-    private void InitializeGame()
+    public void StartWithPrefetchedData()
     {
-        // Subscribe to component events
-        if (fetcher != null)
+        Debug.Log("[GameController] Starting with prefetched data");
+        
+        // Get prefetched data path
+        string prefetchedPath = DataManager.Instance.GetPrefetchedDataPath();
+        if (string.IsNullOrEmpty(prefetchedPath))
         {
-            fetcher.OnFetchStarted += HandleFetchStarted;
-            fetcher.OnFetchCompleted += HandleFetchCompleted;
-            fetcher.OnFetchFailed += HandleFetchFailed;
+            Debug.LogError("[GameController] No prefetched data available!");
+            if (uiManager != null)
+                uiManager.UpdateProgressText("No prefetched data available!");
+            return;
         }
 
-        if (fuzzyCalculator != null)
-        {
-            fuzzyCalculator.OnFuzzyStarted += HandleFuzzyStarted;
-            fuzzyCalculator.OnFuzzyCompleted += HandleFuzzyCompleted;
-            fuzzyCalculator.OnFuzzyFailed += HandleFuzzyFailed;
-            fuzzyCalculator.OnProgressUpdate += HandleFuzzyProgress;
-        }
+        Debug.Log($"[GameController] Using prefetched data: {prefetchedPath}");
+        if (uiManager != null)
+            uiManager.UpdateProgressText("Using prefetched data...");
 
+        // Update raw markers first
         if (markerUpdater != null)
         {
-            markerUpdater.OnFuzzyMarkersUpdated += HandleFuzzyMarkersUpdated;
+            markerUpdater.UpdateRawMarkers(prefetchedPath);
+            Debug.Log("[GameController] Raw markers updated");
         }
-
-        if (uiManager != null)
-        {
-            uiManager.OnTryAgainClicked += StartDataFetching;
-            uiManager.OnUsePrefetchedClicked += UsePrefetchedData;
-        }
-
-        if (heatmapGenerator != null)
-        {
-            heatmapGenerator.OnFuzzyHeatmapGenerated += HandleFuzzyHeatmapGenerated;
-            heatmapGenerator.OnRawHeatmapGenerated += HandleRawHeatmapGenerated;
-            Debug.Log("[GameController] HeatmapGenerator events subscribed");
-        }
-        else
-        {
-            Debug.LogWarning("[GameController] HeatmapGenerator is not assigned!");
-        }
-
-        // Auto-start fetching if enabled
-        if (autoStartFetching)
-        {
-            StartCoroutine(DelayedAutoStart());
-        }
-    }
-
-    private IEnumerator DelayedAutoStart()
-    {
-        yield return new WaitForSeconds(1f); // Small delay to ensure all components are ready
-        StartDataFetching();
-    }
-
-    public void StartDataFetching()
-    {
-        if (fetcher != null)
-        {
-            if (uiManager != null)
-                uiManager.HideErrorPopup();
-            
-            fetcher.StartFetching();
-        }
-    }
-
-    public void UsePrefetchedData()
-    {
-        if (fetcher != null)
-        {
-            if (uiManager != null)
-                uiManager.HideErrorPopup();
-            
-            fetcher.FetchWithPrefetchedData();
-        }
-    }
-
-    // Event Handlers
-    private void HandleFetchStarted(string message)
-    {
-        Debug.Log($"[GameController] Fetch started: {message}");
-        if (uiManager != null)
-            uiManager.OnFetchStarted();
-    }
-
-    private void HandleFetchCompleted(string csvPath)
-    {
-        Debug.Log($"[GameController] Fetch completed: {csvPath}");
-        if (uiManager != null)
-            uiManager.OnFetchCompleted();
-
-        // Update raw markers
-        if (markerUpdater != null)
-            markerUpdater.UpdateRawMarkers(csvPath);
 
         // Start fuzzy calculation
         if (fuzzyCalculator != null)
-            fuzzyCalculator.StartFuzzyCalculation(csvPath);
+        {
+            StartCoroutine(StartFuzzyWithDelay(prefetchedPath));
+        }
     }
 
-    private void HandleFetchFailed(string error)
+    private IEnumerator StartFuzzyWithDelay(string csvPath)
     {
-        Debug.LogError($"[GameController] Fetch failed: {error}");
+        yield return new WaitForSeconds(1f); // Small delay to ensure markers are updated
+        
         if (uiManager != null)
-            uiManager.OnFetchFailed(error);
+            uiManager.UpdateProgressText("Starting fuzzy calculation...");
+            
+        Debug.Log("[GameController] Starting fuzzy calculation");
+        
+        // Subscribe to fuzzy events
+        fuzzyCalculator.OnFuzzyStarted += HandleFuzzyStarted;
+        fuzzyCalculator.OnFuzzyCompleted += HandleFuzzyCompleted;
+        fuzzyCalculator.OnFuzzyFailed += HandleFuzzyFailed;
+        fuzzyCalculator.OnProgressUpdate += HandleFuzzyProgress;
+        
+        fuzzyCalculator.StartFuzzyCalculation(csvPath);
     }
 
     private void HandleFuzzyStarted(string message)
     {
         Debug.Log($"[GameController] Fuzzy started: {message}");
         if (uiManager != null)
-            uiManager.OnFuzzyStarted();
+            uiManager.UpdateProgressText("Fuzzy calculation started");
     }
 
     private void HandleFuzzyCompleted(string csvPath)
     {
         Debug.Log($"[GameController] Fuzzy completed: {csvPath}");
         if (uiManager != null)
-            uiManager.OnFuzzyCompleted();
+            uiManager.UpdateProgressText("Fuzzy calculation completed!");
 
         // Update fuzzy markers
         if (markerUpdater != null)
+        {
+            markerUpdater.OnFuzzyMarkersUpdated += HandleFuzzyMarkersUpdated;
             markerUpdater.UpdateFuzzyMarkers(csvPath);
+        }
 
-        // Calculate UHI intensity
-        CalculateAndUpdateUHI(csvPath);
+        // Calculate simple UHI intensity
+        CalculateSimpleUHI();
+        
+        // Clear progress text after delay
+        StartCoroutine(ClearProgressAfterDelay());
     }
 
     private void HandleFuzzyFailed(string error)
     {
         Debug.LogError($"[GameController] Fuzzy failed: {error}");
         if (uiManager != null)
-            uiManager.OnFuzzyFailed(error);
+            uiManager.UpdateProgressText($"Fuzzy calculation failed: {error}");
     }
 
     private void HandleFuzzyProgress(int current, int total)
     {
         if (uiManager != null)
-            uiManager.OnFuzzyProgress(current, total);
+            uiManager.UpdateProgressText($"Fuzzy calculation: {current}/{total}");
     }
 
     private void HandleFuzzyMarkersUpdated(List<(Transform marker, float value)> markerData)
     {
-        // Create hotspots only from fuzzy data
+        Debug.Log($"[GameController] Fuzzy markers updated: {markerData.Count} markers");
+        
+        // Create hotspots from fuzzy data
         if (hotspotManager != null)
         {
             hotspotManager.CreateTop5Hotspots(markerData, "fuzzy");
         }
-
-        // Update hotspot mitigation UI
-        if (uiManager != null)
-            uiManager.UpdateHotspotMitigation(mitigatedHotspots, totalHotspots);
     }
 
-    private void CalculateAndUpdateUHI(string fuzzyCsvPath)
+    private void CalculateSimpleUHI()
     {
-        if (fuzzyCalculator != null)
-        {
-            currentUHIIntensity = fuzzyCalculator.CalculateUHIIntensity(fuzzyCsvPath, true);
-            
-            if (uiManager != null)
-                uiManager.UpdateUHIIntensity(currentUHIIntensity);
-                
-            Debug.Log($"[GameController] UHI Intensity calculated: {currentUHIIntensity:F1}°C");
-        }
-    }
-
-    // Heatmap event handlers
-    private void HandleFuzzyHeatmapGenerated(List<Transform> topHotspots)
-    {
-        Debug.Log($"[GameController] Fuzzy heatmap generated with {topHotspots.Count} top hotspots");
-        // Optional: Create hotspots from heatmap data if needed
-        // Currently hotspots are created from MarkerUpdater events, so this is for future use
-    }
-
-    private void HandleRawHeatmapGenerated(List<Transform> topHotspots)
-    {
-        Debug.Log($"[GameController] Raw heatmap generated with {topHotspots.Count} top hotspots");
-        // Optional: Create hotspots from heatmap data if needed
-        // Currently hotspots are created from MarkerUpdater events, so this is for future use
-    }
-
-    // Public methods for game state management
-    public void TransitionToGameMode()
-    {
-        isInGameMode = true;
-        if (uiManager != null)
-            uiManager.TransitionToGameMode();
+        // Simple UHI calculation: highest urban temperature - lowest rural temperature
+        float uhiIntensity = CalculateSimpleUHIFromMarkers();
         
-        // Notify AudioManager about game mode
-        if (AudioManager.Instance != null)
-            AudioManager.Instance.OnGameModeEntered();
-    }
-
-    public void TransitionToMainMenu()
-    {
-        isInGameMode = false;
         if (uiManager != null)
-            uiManager.TransitionToMainMenu();
+            uiManager.UpdateUHIIntensity(uhiIntensity);
             
-        // Notify AudioManager about main menu
-        if (AudioManager.Instance != null)
-            AudioManager.Instance.OnMainMenuEntered();
+        Debug.Log($"[GameController] Simple UHI Intensity: {uhiIntensity:F1}°C");
     }
 
-    // Mitigation methods
-    public void OnHotspotMitigated()
+    private float CalculateSimpleUHIFromMarkers()
     {
-        mitigatedHotspots++;
+        float highestUrban = float.MinValue;
+        float lowestRural = float.MaxValue;
+        
+        // Check raw markers for temperature values
+        if (markerUpdater != null && markerUpdater.rawMarkerParent != null)
+        {
+            foreach (Transform child in markerUpdater.rawMarkerParent)
+            {
+                var markerInfo = child.GetComponent<MarkerInfo>();
+                var textComponent = child.GetComponentInChildren<TMPro.TextMeshProUGUI>();
+                
+                if (markerInfo != null && textComponent != null)
+                {
+                    string tempText = textComponent.text.Replace("°C", "").Trim();
+                    if (float.TryParse(tempText, out float temp))
+                    {
+                        if (markerInfo.isRural)
+                        {
+                            if (temp < lowestRural)
+                                lowestRural = temp;
+                        }
+                        else // urban
+                        {
+                            if (temp > highestUrban)
+                                highestUrban = temp;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Return difference if we found both values
+        if (highestUrban != float.MinValue && lowestRural != float.MaxValue)
+        {
+            return highestUrban - lowestRural;
+        }
+        
+        return 0f;
+    }
+
+    private IEnumerator ClearProgressAfterDelay()
+    {
+        yield return new WaitForSeconds(3f);
         if (uiManager != null)
-            uiManager.UpdateHotspotMitigation(mitigatedHotspots, totalHotspots);
-    }
-
-    public void ResetMitigationCount()
-    {
-        mitigatedHotspots = 0;
-        if (uiManager != null)
-            uiManager.UpdateHotspotMitigation(mitigatedHotspots, totalHotspots);
-    }
-
-    // Getters for other scripts
-    public float GetCurrentUHIIntensity()
-    {
-        return currentUHIIntensity;
-    }
-
-    public int GetMitigatedHotspotsCount()
-    {
-        return mitigatedHotspots;
-    }
-
-    public DataPackage GetCurrentDataPackage()
-    {
-        return dataManager?.GetCurrentDataPackage();
-    }
-
-    public DataPackage GetLatestCompleteDataPackage()
-    {
-        return dataManager?.GetLatestCompletePackage();
-    }
-
-    // Method to force refresh all data
-    public void RefreshAllData()
-    {
-        StartDataFetching();
+            uiManager.UpdateProgressText("");
     }
 
     private void OnDestroy()
     {
         // Unsubscribe from events
-        if (fetcher != null)
-        {
-            fetcher.OnFetchStarted -= HandleFetchStarted;
-            fetcher.OnFetchCompleted -= HandleFetchCompleted;
-            fetcher.OnFetchFailed -= HandleFetchFailed;
-        }
-
         if (fuzzyCalculator != null)
         {
             fuzzyCalculator.OnFuzzyStarted -= HandleFuzzyStarted;
@@ -303,18 +201,6 @@ public class GameController : MonoBehaviour
         if (markerUpdater != null)
         {
             markerUpdater.OnFuzzyMarkersUpdated -= HandleFuzzyMarkersUpdated;
-        }
-
-        if (uiManager != null)
-        {
-            uiManager.OnTryAgainClicked -= StartDataFetching;
-            uiManager.OnUsePrefetchedClicked -= UsePrefetchedData;
-        }
-
-        if (heatmapGenerator != null)
-        {
-            heatmapGenerator.OnFuzzyHeatmapGenerated -= HandleFuzzyHeatmapGenerated;
-            heatmapGenerator.OnRawHeatmapGenerated -= HandleRawHeatmapGenerated;
         }
     }
 } 

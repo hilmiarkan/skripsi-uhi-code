@@ -7,7 +7,11 @@ public class PrologController : MonoBehaviour
     [Header("Prolog UI Root")]
     public GameObject prologUIRoot;
 
-    [Header("Prolog Camera Points (only for Camera.main)")]
+    [Header("Core References")]
+    [Tooltip("Referensi ke XR Rig atau Player Controller yang akan digerakkan.")]
+    public Transform playerRig; // Menggantikan referensi ke kamera
+
+    [Header("Prolog Camera Points (Target untuk Player Rig)")]
     public Transform prologPoint1;
     public Transform prologPoint2;
     public Transform prologPoint3;
@@ -40,19 +44,23 @@ public class PrologController : MonoBehaviour
 
     public event System.Action OnPrologComplete;
 
-    private Transform mainCameraTransform;
     private Coroutine prologCoroutine;
+    private Camera mainCamera; // Tambahkan referensi kamera
 
     void Awake()
     {
+        // Cache kamera utama
+        mainCamera = Camera.main;
+
         // 1) Hide the prolog UI root at start
         if (prologUIRoot != null) prologUIRoot.SetActive(false);
         else Debug.LogError("[PrologController] prologUIRoot was not assigned!");
 
-        // 2) Cache Camera.main's Transform (Prolog moves only the camera, not the XR rig)
-        Camera mainCam = Camera.main;
-        if (mainCam != null) mainCameraTransform = mainCam.transform;
-        else Debug.LogError("[PrologController] MainCamera was not found!");
+        // 2) Validasi referensi Player Rig. Ini harus di-assign dari MainMenuNavigation.
+        if (playerRig == null)
+        {
+            Debug.LogError("[PrologController] Player Rig reference was not assigned! Prolog cannot move the player.");
+        }
 
         // 3) Prepare fade panel
         if (fadePanel != null) fadePanel.alpha = 0f;
@@ -91,6 +99,18 @@ public class PrologController : MonoBehaviour
         prologCoroutine = StartCoroutine(PrologSequenceCoroutine());
     }
 
+    private void LateUpdate()
+    {
+        // Logika untuk membuat Prolog UI (World Space) mengikuti kamera
+        if (prologUIRoot != null && prologUIRoot.activeInHierarchy && mainCamera != null)
+        {
+            // Jarak dan skala bisa disesuaikan sesuai kebutuhan
+            float distance = 2.0f; 
+            prologUIRoot.transform.position = mainCamera.transform.position + mainCamera.transform.forward * distance;
+            prologUIRoot.transform.rotation = Quaternion.LookRotation(prologUIRoot.transform.position - mainCamera.transform.position);
+        }
+    }
+
     private IEnumerator PrologSequenceCoroutine()
     {
         // ————————————————————————————————
@@ -102,9 +122,10 @@ public class PrologController : MonoBehaviour
         yield return StartCoroutine(FadeCanvas(0f, 1f, fadeDuration));
 
         // ————————————————————————————————
-        // STEP 3: Teleport camera to prologPoint1, tunggu 1 detik dengan background hitam
-        mainCameraTransform.position = prologPoint1.position;
-        mainCameraTransform.rotation = prologPoint1.rotation;
+        // STEP 3: Teleport Player Rig ke prologPoint1, tunggu 1 detik dengan background hitam
+        if(playerRig == null) yield break; // Safety check
+        playerRig.position = prologPoint1.position;
+        playerRig.rotation = prologPoint1.rotation;
         yield return new WaitForSeconds(1f);
 
         // ————————————————————————————————
@@ -122,9 +143,9 @@ public class PrologController : MonoBehaviour
         subtitleTMP.text = subtitleLine1;
 
         // ————————————————————————————————
-        // STEP 5: Langsung mulai move camera to prologPoint2 sambil fade out dan voice over
+        // STEP 5: Langsung mulai move Player Rig to prologPoint2 sambil fade out dan voice over
         StartCoroutine(FadeCanvas(1f, 0f, fadeDuration)); // Fade out bersamaan
-        yield return StartCoroutine(MoveCamera(prologPoint2, moveDuration)); // Move camera
+        yield return StartCoroutine(MoveRig(prologPoint2, moveDuration)); // Move Player Rig
 
         // ————————————————————————————————
         // STEP 6: Hide tulisan "PROLOG" setelah camera movement selesai
@@ -147,9 +168,10 @@ public class PrologController : MonoBehaviour
         yield return StartCoroutine(FadeCanvas(1f, 0f, blinkDuration));
 
         // ————————————————————————————————
-        // STEP 12: Teleport → Move camera to prologPoint3, then to prologPoint4 while playing voiceOver2 + subtitleLine2
-        mainCameraTransform.position = prologPoint3.position;
-        mainCameraTransform.rotation = prologPoint3.rotation;
+        // STEP 12: Teleport → Move Player Rig to prologPoint3, then to prologPoint4
+        if(playerRig == null) yield break;
+        playerRig.position = prologPoint3.position;
+        playerRig.rotation = prologPoint3.rotation;
 
         if (AudioManager.Instance != null)
         {
@@ -161,7 +183,7 @@ public class PrologController : MonoBehaviour
         }
         subtitleTMP.text = subtitleLine2;
 
-        yield return StartCoroutine(MoveCamera(prologPoint4, moveDuration2));
+        yield return StartCoroutine(MoveRig(prologPoint4, moveDuration2));
         
         // Wait for voice-over to finish
         if (AudioManager.Instance != null)
@@ -175,9 +197,10 @@ public class PrologController : MonoBehaviour
         subtitleTMP.text = "";
 
         // ————————————————————————————————
-        // STEP 13: Teleport → Move camera to prologPoint5, then to prologPoint6 while playing voiceOver3 + subtitleLine3
-        mainCameraTransform.position = prologPoint5.position;
-        mainCameraTransform.rotation = prologPoint5.rotation;
+        // STEP 13: Teleport → Move Player Rig to prologPoint5, then to prologPoint6
+        if(playerRig == null) yield break;
+        playerRig.position = prologPoint5.position;
+        playerRig.rotation = prologPoint5.rotation;
 
         if (AudioManager.Instance != null)
         {
@@ -189,7 +212,7 @@ public class PrologController : MonoBehaviour
         }
         subtitleTMP.text = subtitleLine3;
 
-        yield return StartCoroutine(MoveCamera(prologPoint6, moveDuration3));
+        yield return StartCoroutine(MoveRig(prologPoint6, moveDuration3));
         
         // Wait for voice-over to finish
         if (AudioManager.Instance != null)
@@ -228,10 +251,12 @@ public class PrologController : MonoBehaviour
         fadePanel.alpha = toAlpha;
     }
 
-    private IEnumerator MoveCamera(Transform target, float dur)
+    private IEnumerator MoveRig(Transform target, float dur)
     {
-        Vector3 startPos = mainCameraTransform.position;
-        Quaternion startRot = mainCameraTransform.rotation;
+        if (playerRig == null) yield break;
+
+        Vector3 startPos = playerRig.position;
+        Quaternion startRot = playerRig.rotation;
         Vector3 endPos = target.position;
         Quaternion endRot = target.rotation;
 
@@ -239,12 +264,11 @@ public class PrologController : MonoBehaviour
         while (elapsed < dur)
         {
             float t = elapsed / dur; // Linear interpolation instead of SmoothStep
-            mainCameraTransform.position = Vector3.Lerp(startPos, endPos, t);
-            mainCameraTransform.rotation = Quaternion.Slerp(startRot, endRot, t);
+            playerRig.position = Vector3.Lerp(startPos, endPos, t);
             elapsed += Time.deltaTime;
             yield return null;
         }
-        mainCameraTransform.position = endPos;
-        mainCameraTransform.rotation = endRot;
+        playerRig.position = endPos;
+        playerRig.rotation = endRot;
     }
 }

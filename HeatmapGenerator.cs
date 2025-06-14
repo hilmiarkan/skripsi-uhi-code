@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
+using System.IO;
 
 /// <summary>
 /// Refactored HeatmapGenerator - focuses only on heatmap texture generation and display.
@@ -278,6 +279,7 @@ public class HeatmapGenerator : MonoBehaviour
                 yield return null;
             }
             heatmapTextureFuzzy.Apply();
+            SaveHeatmapTexture(heatmapTextureFuzzy, "fuzzy_heatmap");
             generateRoutineFuzzy = null;
             yield break;
         }
@@ -292,6 +294,10 @@ public class HeatmapGenerator : MonoBehaviour
         yield return StartCoroutine(GenerateHeatmapIDW(heatmapTextureFuzzy, markers, topHotspots, meshMin, meshSize));
 
         heatmapTextureFuzzy.Apply();
+        
+        // Save the generated texture
+        SaveHeatmapTexture(heatmapTextureFuzzy, "fuzzy_heatmap");
+        
         generateRoutineFuzzy = null;
 
         // Notify system about top hotspots
@@ -345,6 +351,7 @@ public class HeatmapGenerator : MonoBehaviour
                 yield return null;
             }
             heatmapTextureRaw.Apply();
+            SaveHeatmapTexture(heatmapTextureRaw, "raw_heatmap");
             generateRoutineRaw = null;
             yield break;
         }
@@ -359,6 +366,10 @@ public class HeatmapGenerator : MonoBehaviour
         yield return StartCoroutine(GenerateHeatmapIDW(heatmapTextureRaw, markers, topHotspots, meshMin, meshSize));
 
         heatmapTextureRaw.Apply();
+        
+        // Save the generated texture
+        SaveHeatmapTexture(heatmapTextureRaw, "raw_heatmap");
+        
         generateRoutineRaw = null;
 
         // Notify system about top hotspots
@@ -452,6 +463,43 @@ public class HeatmapGenerator : MonoBehaviour
             yield return null;
         }
         t.localPosition = new Vector3(basePos.x, endY, basePos.z);
+    }
+
+    // Save heatmap texture as PNG file
+    private void SaveHeatmapTexture(Texture2D texture, string baseFileName)
+    {
+        try
+        {
+            // Create HeatmapTextures folder if it doesn't exist
+            string folderPath = Path.Combine(Application.dataPath, "HeatmapTextures");
+            if (!Directory.Exists(folderPath))
+            {
+                Directory.CreateDirectory(folderPath);
+                Debug.Log($"[HeatmapGenerator] Created folder: {folderPath}");
+            }
+
+            // Generate filename with timestamp
+            string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string fileName = $"{baseFileName}_{timestamp}.png";
+            string filePath = Path.Combine(folderPath, fileName);
+
+            // Convert texture to PNG bytes
+            byte[] pngData = texture.EncodeToPNG();
+            
+            // Save file
+            File.WriteAllBytes(filePath, pngData);
+            
+            Debug.Log($"[HeatmapGenerator] Saved {baseFileName} texture to: {filePath}");
+            
+            // Refresh Unity's asset database to show the new file
+            #if UNITY_EDITOR
+            UnityEditor.AssetDatabase.Refresh();
+            #endif
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[HeatmapGenerator] Failed to save {baseFileName} texture: {e.Message}");
+        }
     }
 
     // Public methods for external control
