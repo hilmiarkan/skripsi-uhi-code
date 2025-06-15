@@ -200,7 +200,8 @@ public class FuzzyCalculator : MonoBehaviour
     {
         try
         {
-            string outDir = Path.Combine(Application.dataPath, DataManager.Instance.fuzzyDataFolder);
+            // Gunakan persistentDataPath untuk kompatibilitas dengan Meta Quest 2
+            string outDir = Path.Combine(Application.persistentDataPath, DataManager.Instance.fuzzyDataFolder);
             string fileName = $"fuzzy_{timestamp}.csv";
             string fullPath = Path.Combine(outDir, fileName);
 
@@ -369,8 +370,10 @@ public class FuzzyCalculator : MonoBehaviour
 
             if (typeIdx < 0 || tempIdx < 0) return 0f;
 
-            float sumUrban = 0f, sumRural = 0f;
-            int countUrban = 0, countRural = 0;
+            float maxUrbanTemp = float.MinValue;
+            float minRuralTemp = float.MaxValue;
+            bool hasUrbanData = false;
+            bool hasRuralData = false;
 
             for (int i = 1; i < lines.Length; i++)
             {
@@ -382,22 +385,32 @@ public class FuzzyCalculator : MonoBehaviour
                 {
                     if (type == "urban")
                     {
-                        sumUrban += temp;
-                        countUrban++;
+                        if (temp > maxUrbanTemp)
+                        {
+                            maxUrbanTemp = temp;
+                            hasUrbanData = true;
+                        }
                     }
                     else if (type == "rural")
                     {
-                        sumRural += temp;
-                        countRural++;
+                        if (temp < minRuralTemp)
+                        {
+                            minRuralTemp = temp;
+                            hasRuralData = true;
+                        }
                     }
                 }
             }
 
-            if (countUrban == 0 || countRural == 0) return 0f;
+            if (!hasUrbanData || !hasRuralData) 
+            {
+                Debug.LogWarning("[FuzzyCalculator] Insufficient data for UHI calculation - need both urban and rural data");
+                return 0f;
+            }
 
-            float avgUrban = sumUrban / countUrban;
-            float avgRural = sumRural / countRural;
-            return avgUrban - avgRural;
+            float uhiIntensity = maxUrbanTemp - minRuralTemp;
+            Debug.Log($"[FuzzyCalculator] UHI Intensity: Max Urban ({maxUrbanTemp:F1}°C) - Min Rural ({minRuralTemp:F1}°C) = {uhiIntensity:F1}°C");
+            return uhiIntensity;
         }
         catch (Exception ex)
         {

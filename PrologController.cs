@@ -46,6 +46,7 @@ public class PrologController : MonoBehaviour
 
     private Coroutine prologCoroutine;
     private Camera mainCamera; // Tambahkan referensi kamera
+    private bool isPrologActive = false; // Flag untuk mengontrol UI updates
 
     void Awake()
     {
@@ -101,8 +102,8 @@ public class PrologController : MonoBehaviour
 
     private void LateUpdate()
     {
-        // Logika untuk membuat Prolog UI (World Space) mengikuti kamera
-        if (prologUIRoot != null && prologUIRoot.activeInHierarchy && mainCamera != null)
+        // Hanya update UI positioning jika prolog aktif dan tidak sedang bergerak
+        if (isPrologActive && prologUIRoot != null && prologUIRoot.activeInHierarchy && mainCamera != null)
         {
             // Jarak dan skala bisa disesuaikan sesuai kebutuhan
             float distance = 2.0f; 
@@ -113,6 +114,21 @@ public class PrologController : MonoBehaviour
 
     private IEnumerator PrologSequenceCoroutine()
     {
+        isPrologActive = true;
+        
+        // Notify UIManager bahwa prolog sedang aktif
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance.SetPrologActive(true);
+        }
+        
+        // Hentikan sementara proses auto-start yang berat
+        if (GameController.Instance != null)
+        {
+            GameController.Instance.autoStartGameProcesses = false;
+            Debug.Log("[PrologController] Temporarily disabled auto-start processes during prolog");
+        }
+
         // ————————————————————————————————
         // STEP 1: AudioManager already started prolog BGM when MainMenuNavigation called OnPrologStarted()
         Debug.Log("[PrologController] Prolog BGM should already be playing via AudioManager.");
@@ -124,6 +140,16 @@ public class PrologController : MonoBehaviour
         // ————————————————————————————————
         // STEP 3: Teleport Player Rig ke prologPoint1, tunggu 1 detik dengan background hitam
         if(playerRig == null) yield break; // Safety check
+        
+        // Disable CharacterController temporarily untuk movement yang lebih smooth
+        CharacterController cc = playerRig.GetComponent<CharacterController>();
+        bool wasControllerEnabled = false;
+        if (cc != null)
+        {
+            wasControllerEnabled = cc.enabled;
+            cc.enabled = false;
+        }
+        
         playerRig.position = prologPoint1.position;
         playerRig.rotation = prologPoint1.rotation;
         yield return new WaitForSeconds(1f);
@@ -145,7 +171,7 @@ public class PrologController : MonoBehaviour
         // ————————————————————————————————
         // STEP 5: Langsung mulai move Player Rig to prologPoint2 sambil fade out dan voice over
         StartCoroutine(FadeCanvas(1f, 0f, fadeDuration)); // Fade out bersamaan
-        yield return StartCoroutine(MoveRig(prologPoint2, moveDuration)); // Move Player Rig
+        yield return StartCoroutine(MoveRigSmooth(prologPoint2, moveDuration)); // Move Player Rig dengan smoothing
 
         // ————————————————————————————————
         // STEP 6: Hide tulisan "PROLOG" setelah camera movement selesai
@@ -183,7 +209,7 @@ public class PrologController : MonoBehaviour
         }
         subtitleTMP.text = subtitleLine2;
 
-        yield return StartCoroutine(MoveRig(prologPoint4, moveDuration2));
+        yield return StartCoroutine(MoveRigSmooth(prologPoint4, moveDuration2));
         
         // Wait for voice-over to finish
         if (AudioManager.Instance != null)
@@ -212,7 +238,7 @@ public class PrologController : MonoBehaviour
         }
         subtitleTMP.text = subtitleLine3;
 
-        yield return StartCoroutine(MoveRig(prologPoint6, moveDuration3));
+        yield return StartCoroutine(MoveRigSmooth(prologPoint6, moveDuration3));
         
         // Wait for voice-over to finish
         if (AudioManager.Instance != null)
@@ -225,6 +251,12 @@ public class PrologController : MonoBehaviour
         }
         subtitleTMP.text = "";
 
+        // Re-enable CharacterController jika sebelumnya aktif
+        if (cc != null && wasControllerEnabled)
+        {
+            cc.enabled = true;
+        }
+
         // ————————————————————————————————
         // STEP 14: Stop prolog audio via AudioManager, then fire the OnPrologComplete event
         if (AudioManager.Instance != null)
@@ -235,6 +267,22 @@ public class PrologController : MonoBehaviour
         {
             audioManager.OnPrologEnded();
         }
+        
+        isPrologActive = false;
+        
+        // Notify UIManager bahwa prolog selesai
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance.SetPrologActive(false);
+        }
+        
+        // Re-enable auto-start processes setelah prolog selesai
+        if (GameController.Instance != null)
+        {
+            GameController.Instance.autoStartGameProcesses = true;
+            Debug.Log("[PrologController] Re-enabled auto-start processes after prolog");
+        }
+        
         Debug.Log("[PrologController] Prolog finished → invoking OnPrologComplete().");
         OnPrologComplete?.Invoke();
     }
@@ -251,7 +299,7 @@ public class PrologController : MonoBehaviour
         fadePanel.alpha = toAlpha;
     }
 
-    private IEnumerator MoveRig(Transform target, float dur)
+    private IEnumerator MoveRigSmooth(Transform target, float dur)
     {
         if (playerRig == null) yield break;
 
@@ -263,12 +311,27 @@ public class PrologController : MonoBehaviour
         float elapsed = 0f;
         while (elapsed < dur)
         {
-            float t = elapsed / dur; // Linear interpolation instead of SmoothStep
-            playerRig.position = Vector3.Lerp(startPos, endPos, t);
+            float t = elapsed / dur;
+            // Gunakan smoothstep untuk pergerakan yang lebih halus
+            float smoothT = Mathf.SmoothStep(0f, 1f, t);
+            
+            playerRig.position = Vector3.Lerp(startPos, endPos, smoothT);
+            playerRig.rotation = Quaternion.Slerp(startRot, endRot, smoothT);
+            
             elapsed += Time.deltaTime;
             yield return null;
         }
+        
         playerRig.position = endPos;
         playerRig.rotation = endRot;
+        
+        // Tambahan delay kecil untuk stabilitas
+        yield return new WaitForSeconds(0.1f);
+    }
+
+    // Backward compatibility - keep the old method name
+    private IEnumerator MoveRig(Transform target, float dur)
+    {
+        return MoveRigSmooth(target, dur);
     }
 }
